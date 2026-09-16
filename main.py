@@ -1,9 +1,11 @@
 """CLI entry point: score every post in a text file for misinformation
-risk and save the results.
+risk, then extract and verify any checkable factual claims, and save
+the results.
 
 Usage:
     python main.py sample_posts.txt
     python main.py sample_posts.txt -o results.json -t 70
+    python main.py sample_posts.txt --no-verify
 """
 
 import argparse
@@ -13,6 +15,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from analyzer import AnalysisError, MisinfoAnalyzer
+from claimextractor import ExtractionError, ClaimExtractor
+from verifier import ClaimVerifier
 from storage import save_results
 
 # Loads ANTHROPIC_API_KEY from a .env file in this folder, if present.
@@ -41,6 +45,12 @@ def parse_args():
         "-t", "--threshold", type=int, default=60,
         help="Score at/above which a post is flagged (default: 60)",
     )
+    parser.add_argument(
+        "--no-verify", action="store_true",
+        help="Skip claim extraction/verification -- just score posts. "
+             "Faster and free of web-search calls, useful while you're "
+             "iterating on the scoring prompt alone.",
+    )
     return parser.parse_args()
 
 
@@ -57,6 +67,8 @@ def main():
         sys.exit(1)
 
     analyzer = MisinfoAnalyzer()
+    extractor = ClaimExtractor()
+    verifier = ClaimVerifier()
     results = []
 
     for i, post in enumerate(posts, start=1):
@@ -69,11 +81,27 @@ def main():
 
         result["post"] = post
         result["flagged"] = result["score"] >= args.threshold
-        results.append(result)
+        result["claims"] = []
 
         marker = "FLAGGED" if result["flagged"] else "ok"
         print(f"  Score: {result['score']} [{marker}] - "
               f"{result.get('reasoning', '')}")
+
+        if not args.no_verify:
+            try:
+                claims = extractor.extract(post)
+            except ExtractionError as e:
+                print(f"  Claim extraction failed: {e}")
+                claims = []
+
+            if claims:
+                print(f"  Checking {len(claims)} claim(s)...")
+                for claim_result in verifier.verify_all(claims):
+                    result["claims"].append(claim_result)
+                    print(f"    [{claim_result['verdict'].upper()}] "
+                          f"{claim_result['claim']}")
+
+        results.append(result)
 
     save_results(results, args.output)
     flagged_count = sum(1 for r in results if r["flagged"])

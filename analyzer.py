@@ -67,7 +67,7 @@ class MisinfoAnalyzer:
             "You are a misinformation-risk classifier. Analyze the "
             "following social media post and respond ONLY with valid "
             "JSON in this exact shape, with no other text before or "
-            "after it:\n"
+            "after it, and no markdown code fences (no ```):\n"
             '{"score": <integer 0-100>, "flags": [<short strings>], '
             '"reasoning": "<one or two sentences>"}\n\n'
             "score: 0 means clearly reliable, 100 means highly likely "
@@ -81,8 +81,15 @@ class MisinfoAnalyzer:
 
     def _parse_response(self, raw_text):
         """Turn the model's raw text reply into a validated dict."""
+        cleaned = raw_text.strip()
+        if cleaned.startswith("```"):
+            # Strip markdown code fences, e.g. ```json ... ```
+            cleaned = cleaned.strip("`").strip()
+            if cleaned.lower().startswith("json"):
+                cleaned = cleaned[4:].strip()
+
         try:
-            data = json.loads(raw_text)
+            data = json.loads(cleaned)
         except json.JSONDecodeError as e:
             raise AnalysisError(
                 f"Model didn't return valid JSON: {raw_text[:200]!r}"
